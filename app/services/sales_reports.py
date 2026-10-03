@@ -1,7 +1,10 @@
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from typing import TypedDict
 
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from playwright.sync_api import sync_playwright
 from sqlalchemy import distinct, func, select
 from sqlalchemy.orm import Session
 
@@ -14,6 +17,12 @@ class SalesSummary(TypedDict):
     revenue: Decimal
     average_order_value: Decimal
     product_count: int
+
+
+template_environment = Environment(
+    loader=FileSystemLoader(Path(__file__).parents[2] / "templates"),
+    autoescape=select_autoescape(["html", "xml"]),
+)
 
 
 def query_sales_summary(
@@ -46,3 +55,22 @@ def query_sales_summary(
         "average_order_value": Decimal(totals.average_order_value),
         "product_count": int(totals.product_count),
     }
+
+
+def render_sales_report(
+    summary: SalesSummary, start_date: date, end_date: date
+) -> bytes:
+    template = template_environment.get_template("sales_report.html")
+    html = template.render(
+        start_date=start_date,
+        end_date=end_date,
+        summary=summary,
+    )
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            page.set_content(html, wait_until="load")
+            return page.pdf(format="A4", print_background=True)
+        finally:
+            browser.close()

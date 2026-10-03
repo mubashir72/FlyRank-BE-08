@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN python -m playwright install --with-deps chromium
 
 COPY app ./app
+COPY templates ./templates
 
 RUN mkdir -p /app/artifacts
 
