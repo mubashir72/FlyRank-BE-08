@@ -1,13 +1,14 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.responses import FileResponse
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -65,6 +66,7 @@ def readiness(db: DbSession) -> dict[str, str]:
 )
 def create_report(
     db: DbSession,
+    response: Response,
     payload: Annotated[ReportCreate | None, Body()] = None,
 ) -> ReportCreated:
     request = payload or ReportCreate()
@@ -73,6 +75,24 @@ def create_report(
     report_path = report_dir / f"{report_id}.pdf"
     temporary_path = report_dir / f".{report_id}.tmp.pdf"
     try:
+        if not request.force:
+            if db.get_bind().dialect.name == "sqlite":
+                db.execute(text("BEGIN IMMEDIATE"))
+            existing_reports = db.scalars(
+                select(Report)
+                .where(func.date(Report.created_at) == date.today().isoformat())
+                .order_by(Report.created_at.desc())
+            )
+            for existing in existing_reports:
+                existing_path = _report_path(existing)
+                if existing_path is not None and existing_path.is_file():
+                    db.rollback()
+                    response.status_code = status.HTTP_200_OK
+                    return ReportCreated(
+                        id=existing.id,
+                        file=f"/reports/{existing.id}/file",
+                    )
+
         report_dir.mkdir(parents=True, exist_ok=True)
         report = get_report_data(db, request.start_date, request.end_date)
         render_sales_report(

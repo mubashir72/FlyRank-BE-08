@@ -110,7 +110,7 @@ def test_generate_store_and_download_report(
     assert client.get("/reports").json()[0]["id"] == report["id"]
 
 
-def test_each_report_request_creates_a_separate_report(
+def test_same_day_requests_reuse_report_unless_forced(
     client: TestClient,
     session_factory: sessionmaker[Session],
     monkeypatch: pytest.MonkeyPatch,
@@ -135,16 +135,19 @@ def test_each_report_request_creates_a_separate_report(
         return b"%PDF-report"
 
     monkeypatch.setattr("app.main.render_sales_report", render)
-    body = {"start_date": "2026-09-01", "end_date": "2026-09-30"}
 
     first = client.post("/reports")
-    second = client.post("/reports", json=body)
+    second = client.post("/reports")
+    forced = client.post("/reports", json={"force": True})
 
     assert first.status_code == 201
-    assert second.status_code == 201
-    assert second.json()["id"] != first.json()["id"]
+    assert second.status_code == 200
+    assert second.json()["id"] == first.json()["id"]
+    assert second.json()["file"] == first.json()["file"]
+    assert forced.status_code == 201
+    assert forced.json()["id"] != first.json()["id"]
     assert first.json()["file"] == f"/reports/{first.json()['id']}/file"
-    assert second.json()["file"] == f"/reports/{second.json()['id']}/file"
+    assert forced.json()["file"] == f"/reports/{forced.json()['id']}/file"
     assert renders == [True, True]
     assert len(list(report_dir.glob("*.pdf"))) == 2
     with session_factory() as session:

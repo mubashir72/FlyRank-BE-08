@@ -3,7 +3,6 @@
 A FastAPI service that aggregates a small SQLite orders database, renders an
 HTML report to PDF with Playwright Chromium, saves the PDF to disk, and returns
 a download link. Report generation is synchronous, as required by the workshop.
-Repeated requests for the same date range reuse the saved report.
 
 ## Dataset
 
@@ -69,6 +68,10 @@ curl.exe -L http://localhost:8000/reports/REPORT_ID/file `
   -o sales-report.pdf
 ```
 
+Only one report is generated per day by default; subsequent requests return the
+existing ID and link with `200`. Send `{"force":true}` to generate a fresh
+report anyway.
+
 `GET /reports/{id}` returns the stored report row and its file link. An unknown
 ID returns `404`.
 
@@ -110,6 +113,10 @@ The API stores each PDF's relative path in SQLite; file bytes stay on disk.
 Move report generation to a background job when reports take long enough to
 risk request timeouts or when concurrent report requests noticeably consume
 API capacity.
+
+The daily check protects against duplicate work and report files when a user
+submits the same action more than once. Without it, a billing system could
+charge a customer twice for one purchase.
 
 Scheduled or background generation is optional workshop stretch work and is
 not enabled by default.

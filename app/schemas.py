@@ -10,6 +10,7 @@ class ReportCreate(BaseModel):
         default_factory=lambda: date.today() - timedelta(days=29)
     )
     end_date: date = Field(default_factory=date.today)
+    force: bool = False
 
     @model_validator(mode="after")
     def validate_date_range(self) -> "ReportCreate":
