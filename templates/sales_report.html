@@ -57,6 +57,8 @@
       }
       table.data th { background: #f1f4fa; color: #263b63; }
       table.data td:last-child, table.data th:last-child { text-align: right; }
+      .orders-table thead { display: table-header-group; }
+      .orders-table tr { break-inside: avoid; page-break-inside: avoid; }
       footer {
         border-top: 1px solid #dce4f1;
         color: #8691a3;
@@ -69,7 +71,7 @@
   <body>
     <header>
       <div class="eyebrow">Sales analytics</div>
-      <h1>Sales report</h1>
+      <h1>Sales report · {{ generated_date.strftime("%B %d, %Y") }}</h1>
       <div class="period">{{ start_date.strftime("%b %d, %Y") }} – {{ end_date.strftime("%b %d, %Y") }}</div>
     </header>
     <hr class="rule">
@@ -104,6 +106,31 @@
       <tbody>
         {% for item in report.orders_per_day %}
         <tr><td>{{ item.date.strftime("%b %d, %Y") }}</td><td>{{ item.orders }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <h2>All orders</h2>
+    <table class="data orders-table">
+      <thead>
+        <tr>
+          <th>Order</th>
+          <th>Date</th>
+          <th>Customer</th>
+          <th>Product</th>
+          <th>Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for order in report.all_orders %}
+        <tr>
+          <td>{{ order.id }}</td>
+          <td>{{ order.created_at.strftime("%b %d, %Y") }}</td>
+          <td>{{ order.customer }}</td>
+          <td>{{ order.product }}</td>
+          <td>${{ "{:,.2f}".format(order.amount) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">No orders in this period.</td></tr>
         {% endfor %}
       </tbody>
     </table>

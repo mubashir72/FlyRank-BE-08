@@ -1,3 +1,4 @@
+import re
 import sqlite3
 from datetime import date, timedelta
 from decimal import Decimal
@@ -77,9 +78,19 @@ def test_report_data_has_four_aggregated_sections() -> None:
         {"date": date(2026, 9, 29), "orders": 1},
         {"date": date(2026, 9, 30), "orders": 1},
     ]
+    assert [
+        (order["product"], order["created_at"])
+        for order in report["all_orders"]
+    ] == [
+        ("Old product", date(2026, 9, 23)),
+        ("Mouse", date(2026, 9, 25)),
+        ("Keyboard", date(2026, 9, 29)),
+        ("Keyboard", date(2026, 9, 30)),
+    ]
     assert len(report["top_products"]) <= 5
-    assert len(report) == 4
-    assert len(statements) == 3
+    assert len(report) == 5
+    assert len(report["all_orders"]) == report["total_orders"]
+    assert len(statements) == 4
     assert "GROUP BY" in statements[1].upper()
     assert "LIMIT" in statements[1].upper()
     assert "GROUP BY" in statements[2].upper()
@@ -97,6 +108,15 @@ def test_html_template_renders_to_a_real_pdf() -> None:
                 {"date": date(2026, 9, day), "orders": 0}
                 for day in range(24, 31)
             ],
+            "all_orders": [
+                {
+                    "id": 1,
+                    "customer": "Alex",
+                    "product": "Keyboard",
+                    "amount": Decimal("25.00"),
+                    "created_at": date(2026, 9, 24),
+                }
+            ],
         },
         date(2026, 9, 1),
         date(2026, 9, 30),
@@ -104,6 +124,46 @@ def test_html_template_renders_to_a_real_pdf() -> None:
 
     assert pdf.startswith(b"%PDF-")
     assert len(pdf) > 1_000
+
+
+def test_rendered_report_saves_a_multipage_pdf(tmp_path: Path) -> None:
+    with make_session() as session:
+        session.add_all(
+            [
+                Order(
+                    customer=f"Customer {index:03}",
+                    product=f"Product {index % 6}",
+                    amount=Decimal("25.00"),
+                    created_at=date(2026, 9, 30),
+                )
+                for index in range(200)
+            ]
+        )
+        session.commit()
+        report = get_report_data(
+            session, date(2026, 9, 1), date(2026, 9, 30)
+        )
+
+    output_path = tmp_path / "reports" / "test.pdf"
+    pdf = render_sales_report(
+        report,
+        date(2026, 9, 1),
+        date(2026, 9, 30),
+        output_path=output_path,
+    )
+
+    assert output_path.is_file()
+    assert output_path.read_bytes() == pdf
+    assert len(pdf) > 1_000
+    assert len(re.findall(rb"/Type\s*/Page\b", pdf)) >= 2
+    template = (
+        Path(__file__).parents[1] / "templates" / "sales_report.html"
+    ).read_text(encoding="utf-8")
+    assert ".orders-table thead { display: table-header-group; }" in template
+    assert (
+        ".orders-table tr { break-inside: avoid; page-break-inside: avoid; }"
+        in template
+    )
 
 
 def test_seed_orders_clears_rows_and_reseeds_200_orders(tmp_path: Path) -> None:

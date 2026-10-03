@@ -21,11 +21,20 @@ class DailyOrders(TypedDict):
     orders: int
 
 
+class OrderLine(TypedDict):
+    id: int
+    customer: str
+    product: str
+    amount: Decimal
+    created_at: date
+
+
 class ReportData(TypedDict):
     total_orders: int
     total_revenue: Decimal
     top_products: list[ProductRevenue]
     orders_per_day: list[DailyOrders]
+    all_orders: list[OrderLine]
 
 
 template_environment = Environment(
@@ -78,6 +87,10 @@ def get_report_data(
         daily_query = daily_query.where(period_filter)
     daily_rows = session.execute(daily_query).all()
     orders_by_day = {row.created_at: int(row.orders) for row in daily_rows}
+    all_orders_query = select(Order).order_by(Order.created_at, Order.id)
+    if period_filter is not None:
+        all_orders_query = all_orders_query.where(period_filter)
+    all_order_rows = session.scalars(all_orders_query).all()
 
     return {
         "total_orders": int(totals.total_orders),
@@ -100,16 +113,31 @@ def get_report_data(
             }
             for offset in range(7)
         ],
+        "all_orders": [
+            {
+                "id": order.id,
+                "customer": order.customer,
+                "product": order.product,
+                "amount": order.amount,
+                "created_at": order.created_at,
+            }
+            for order in all_order_rows
+        ],
     }
 
 
 def render_sales_report(
-    report: ReportData, start_date: date, end_date: date
+    report: ReportData,
+    start_date: date,
+    end_date: date,
+    *,
+    output_path: Path | None = None,
 ) -> bytes:
     template = template_environment.get_template("sales_report.html")
     html = template.render(
         start_date=start_date,
         end_date=end_date,
+        generated_date=date.today(),
         report=report,
     )
     with sync_playwright() as playwright:
@@ -117,6 +145,12 @@ def render_sales_report(
         try:
             page = browser.new_page()
             page.set_content(html, wait_until="load")
-            return page.pdf(format="A4", print_background=True)
+            if output_path is not None:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+            return page.pdf(
+                path=str(output_path) if output_path is not None else None,
+                format="A4",
+                print_background=True,
+            )
         finally:
             browser.close()

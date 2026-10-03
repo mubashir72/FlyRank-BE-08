@@ -84,13 +84,22 @@ For a specific period:
 | `GET` | `/reports/{id}` | Look up a report and its download URL |
 | `GET` | `/reports/{id}/download` | Download the saved PDF |
 
-The Stage 2 report data includes total orders, total revenue, the five
-highest-revenue products, and order counts for each of the latest seven days.
+The report data includes total orders, total revenue, the five highest-revenue
+products, order counts for each of the latest seven days, and all order rows.
 Print the aggregated data as JSON without rendering a PDF:
 
 ```powershell
 python -m scripts.print_report
 ```
+
+Render the current dataset into a multi-page PDF with the full order table:
+
+```powershell
+python -m scripts.render_test_report
+```
+
+This saves `reports/test.pdf`. The detailed table repeats its header on each
+printed page and keeps each order row together across page breaks.
 
 The API stores each PDF's path and date range in SQLite; file bytes stay on
 disk. Repeating a report request for the same date range reuses its existing
