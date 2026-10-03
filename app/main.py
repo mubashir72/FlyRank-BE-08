@@ -5,16 +5,16 @@ from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import Base, engine, get_db
-from app.models import ReportArtifact
-from app.schemas import ReportCreate, ReportResponse
+from app.models import Report
+from app.schemas import ReportCreate, ReportCreated, ReportResponse
 from app.services.sales_reports import get_report_data, render_sales_report
 
 logger = logging.getLogger(__name__)
@@ -60,67 +60,40 @@ def readiness(db: DbSession) -> dict[str, str]:
 
 @app.post(
     "/reports",
-    response_model=ReportResponse,
+    response_model=ReportCreated,
     status_code=status.HTTP_201_CREATED,
 )
-def create_report(payload: ReportCreate, db: DbSession) -> ReportResponse:
-    existing = db.scalar(
-        select(ReportArtifact).where(
-            ReportArtifact.start_date == payload.start_date,
-            ReportArtifact.end_date == payload.end_date,
-        )
-    )
-    if existing is not None and _artifact_exists(existing):
-        return ReportResponse.from_artifact(existing)
-
+def create_report(
+    db: DbSession,
+    payload: Annotated[ReportCreate | None, Body()] = None,
+) -> ReportCreated:
+    request = payload or ReportCreate()
+    report_id = str(uuid4())
+    report_dir = Path(settings.artifact_dir).resolve()
+    report_path = report_dir / f"{report_id}.pdf"
+    temporary_path = report_dir / f".{report_id}.tmp.pdf"
     try:
-        report = get_report_data(db, payload.start_date, payload.end_date)
-        pdf_bytes = render_sales_report(report, payload.start_date, payload.end_date)
-        artifact_dir = Path(settings.artifact_dir).resolve()
-        artifact_dir.mkdir(parents=True, exist_ok=True)
-        artifact_path = artifact_dir / (
-            f"sales-report-{payload.start_date.isoformat()}-{payload.end_date.isoformat()}.pdf"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report = get_report_data(db, request.start_date, request.end_date)
+        render_sales_report(
+            report,
+            request.start_date,
+            request.end_date,
+            output_path=temporary_path,
         )
-        temporary_path = artifact_dir / f".{uuid4()}.tmp"
-        temporary_path.write_bytes(pdf_bytes)
-        os.replace(temporary_path, artifact_path)
-
-        if existing is None:
-            existing = ReportArtifact(
-                start_date=payload.start_date,
-                end_date=payload.end_date,
-                artifact_path=str(artifact_path),
-            )
-            db.add(existing)
-        else:
-            existing.artifact_path = str(artifact_path)
+        os.replace(temporary_path, report_path)
+        record = Report(id=report_id, path=report_path.name)
+        db.add(record)
         db.commit()
-        db.refresh(existing)
-        return ReportResponse.from_artifact(existing)
-    except IntegrityError as exc:
-        db.rollback()
-        existing = db.scalar(
-            select(ReportArtifact).where(
-                ReportArtifact.start_date == payload.start_date,
-                ReportArtifact.end_date == payload.end_date,
-            )
-        )
-        if existing is not None and _artifact_exists(existing):
-            return ReportResponse.from_artifact(existing)
-        logger.exception("Concurrent report generation could not be resolved")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "report_conflict",
-                "message": "A report for this date range is being generated.",
-            },
-        ) from exc
+        return ReportCreated(id=record.id, file=f"/reports/{record.id}/file")
     except Exception as exc:
         db.rollback()
+        temporary_path.unlink(missing_ok=True)
+        report_path.unlink(missing_ok=True)
         logger.exception(
             "Report generation failed for %s through %s",
-            payload.start_date,
-            payload.end_date,
+            request.start_date,
+            request.end_date,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -133,35 +106,37 @@ def create_report(payload: ReportCreate, db: DbSession) -> ReportResponse:
 
 @app.get("/reports/{report_id}", response_model=ReportResponse)
 def get_report(report_id: str, db: DbSession) -> ReportResponse:
-    artifact = db.get(ReportArtifact, report_id)
-    if artifact is None:
+    report = db.get(Report, report_id)
+    if report is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "report_not_found", "message": "Report was not found."},
         )
-    return ReportResponse.from_artifact(artifact)
+    return ReportResponse.from_report(report)
 
 
-@app.get("/reports/{report_id}/download")
+@app.get("/reports/{report_id}/file")
+@app.get("/reports/{report_id}/download", include_in_schema=False)
 def download_report(report_id: str, db: DbSession) -> FileResponse:
-    artifact = db.get(ReportArtifact, report_id)
-    if artifact is None:
+    report = db.get(Report, report_id)
+    if report is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "report_not_found", "message": "Report was not found."},
         )
-    if not _artifact_exists(artifact):
+    report_path = _report_path(report)
+    if report_path is None or not report_path.is_file():
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail={
-                "code": "report_artifact_unavailable",
+                "code": "report_file_unavailable",
                 "message": "The report file is no longer available.",
             },
         )
     return FileResponse(
-        artifact.artifact_path,
+        report_path,
         media_type="application/pdf",
-        filename=Path(artifact.artifact_path).name,
+        filename=report_path.name,
     )
 
 
@@ -169,18 +144,22 @@ def download_report(report_id: str, db: DbSession) -> FileResponse:
 def list_reports(
     db: DbSession, limit: Annotated[int, Query(ge=1, le=100)] = 20
 ) -> list[ReportResponse]:
-    artifacts = db.scalars(
-        select(ReportArtifact)
-        .order_by(ReportArtifact.created_at.desc())
+    reports = db.scalars(
+        select(Report)
+        .order_by(Report.created_at.desc())
         .limit(limit)
     )
-    return [ReportResponse.from_artifact(artifact) for artifact in artifacts]
+    return [ReportResponse.from_report(report) for report in reports]
 
 
-def _artifact_exists(artifact: ReportArtifact) -> bool:
-    path = Path(artifact.artifact_path).resolve()
-    artifact_root = Path(settings.artifact_dir).resolve()
-    if path.parent != artifact_root:
-        logger.error("Report artifact path is outside configured storage: %s", path)
-        return False
-    return path.is_file()
+def _report_path(report: Report) -> Path | None:
+    relative_path = Path(report.path)
+    if relative_path.name != report.path or relative_path.suffix.lower() != ".pdf":
+        logger.error("Invalid report path in database: %s", report.path)
+        return None
+    report_dir = Path(settings.artifact_dir).resolve()
+    path = (report_dir / relative_path).resolve()
+    if path.parent != report_dir:
+        logger.error("Report path is outside configured storage: %s", path)
+        return None
+    return path

@@ -12,7 +12,7 @@ RUN python -m playwright install --with-deps chromium
 COPY app ./app
 COPY templates ./templates
 
-RUN mkdir -p /app/artifacts
+RUN mkdir -p /app/reports
 
 EXPOSE 8000
 

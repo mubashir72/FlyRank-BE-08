@@ -3,12 +3,12 @@ services:
     build: .
     environment:
       DATABASE_PATH: /app/data/report.db
-      ARTIFACT_DIR: /app/artifacts
+      ARTIFACT_DIR: /app/reports
     ports:
       - "8000:8000"
     volumes:
       - report-data:/app/data
-      - report-artifacts:/app/artifacts
+      - report-artifacts:/app/reports
 
 volumes:
   report-data:

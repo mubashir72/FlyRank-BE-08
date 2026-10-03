@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
-from app.models import ReportArtifact
+from app.models import Report
 
 
 @pytest.fixture
@@ -41,8 +41,8 @@ def client(session_factory: sessionmaker[Session]) -> TestClient:
 
 
 @pytest.fixture
-def artifact_dir() -> Generator[Path, None, None]:
-    with TemporaryDirectory(prefix=".test-artifacts-", dir=Path.cwd()) as directory:
+def report_dir() -> Generator[Path, None, None]:
+    with TemporaryDirectory(prefix=".test-reports-", dir=Path.cwd()) as directory:
         yield Path(directory)
 
 
@@ -57,11 +57,11 @@ def test_generate_store_and_download_report(
     client: TestClient,
     session_factory: sessionmaker[Session],
     monkeypatch: pytest.MonkeyPatch,
-    artifact_dir: Path,
+    report_dir: Path,
 ) -> None:
     from app.models import Order
 
-    monkeypatch.setattr("app.main.settings.artifact_dir", str(artifact_dir))
+    monkeypatch.setattr("app.main.settings.artifact_dir", str(report_dir))
     with session_factory() as session:
         session.add_all(
             [
@@ -86,32 +86,38 @@ def test_generate_store_and_download_report(
 
     assert response.status_code == 201
     report = response.json()
-    assert report["start_date"] == "2026-09-01"
-    assert report["download_url"] == f"/reports/{report['id']}/download"
-    artifact_path = artifact_dir / "sales-report-2026-09-01-2026-09-30.pdf"
-    assert artifact_path.read_bytes().startswith(b"%PDF-")
+    assert report == {
+        "id": report["id"],
+        "file": f"/reports/{report['id']}/file",
+    }
+    generated_path = report_dir / f"{report['id']}.pdf"
+    assert generated_path.read_bytes().startswith(b"%PDF-")
 
     status_response = client.get(f"/reports/{report['id']}")
     assert status_response.status_code == 200
     assert status_response.json()["id"] == report["id"]
+    assert status_response.json()["path"] == generated_path.name
+    assert status_response.json()["file"] == report["file"]
+    assert status_response.json()["created_at"]
 
-    download = client.get(report["download_url"])
+    download = client.get(report["file"])
     assert download.status_code == 200
     assert download.headers["content-type"] == "application/pdf"
     assert download.content.startswith(b"%PDF-")
 
     with session_factory() as session:
-        assert session.scalar(select(func.count()).select_from(ReportArtifact)) == 1
+        assert session.scalar(select(func.count()).select_from(Report)) == 1
+    assert client.get("/reports").json()[0]["id"] == report["id"]
 
 
-def test_repeated_date_range_reuses_stored_report(
+def test_each_report_request_creates_a_separate_report(
     client: TestClient,
     session_factory: sessionmaker[Session],
     monkeypatch: pytest.MonkeyPatch,
-    artifact_dir: Path,
+    report_dir: Path,
 ) -> None:
     renders: list[bool] = []
-    monkeypatch.setattr("app.main.settings.artifact_dir", str(artifact_dir))
+    monkeypatch.setattr("app.main.settings.artifact_dir", str(report_dir))
     monkeypatch.setattr(
         "app.main.get_report_data",
         lambda *_args: {
@@ -119,26 +125,30 @@ def test_repeated_date_range_reuses_stored_report(
             "total_revenue": Decimal("0"),
             "top_products": [],
             "orders_per_day": [],
+            "all_orders": [],
         },
     )
 
-    def render(*_args: object) -> bytes:
+    def render(*_args: object, output_path: Path) -> bytes:
         renders.append(True)
+        output_path.write_bytes(b"%PDF-report")
         return b"%PDF-report"
 
     monkeypatch.setattr("app.main.render_sales_report", render)
     body = {"start_date": "2026-09-01", "end_date": "2026-09-30"}
 
-    first = client.post("/reports", json=body)
+    first = client.post("/reports")
     second = client.post("/reports", json=body)
 
     assert first.status_code == 201
     assert second.status_code == 201
-    assert second.json()["id"] == first.json()["id"]
-    assert renders == [True]
-    assert len(list(artifact_dir.glob("*.pdf"))) == 1
+    assert second.json()["id"] != first.json()["id"]
+    assert first.json()["file"] == f"/reports/{first.json()['id']}/file"
+    assert second.json()["file"] == f"/reports/{second.json()['id']}/file"
+    assert renders == [True, True]
+    assert len(list(report_dir.glob("*.pdf"))) == 2
     with session_factory() as session:
-        assert session.scalar(select(func.count()).select_from(ReportArtifact)) == 1
+        assert session.scalar(select(func.count()).select_from(Report)) == 2
 
 
 def test_report_rejects_inverted_date_range(client: TestClient) -> None:
@@ -150,25 +160,23 @@ def test_report_rejects_inverted_date_range(client: TestClient) -> None:
     assert response.status_code == 422
 
 
-def test_missing_report_returns_not_found(client: TestClient) -> None:
-    response = client.get("/reports/unknown/download")
+def test_unknown_report_and_file_return_not_found(client: TestClient) -> None:
+    report_response = client.get("/reports/unknown")
+    response = client.get("/reports/unknown/file")
 
+    assert report_response.status_code == 404
     assert response.status_code == 404
 
 
-def test_missing_artifact_returns_gone(
+def test_missing_report_file_returns_gone(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
     with session_factory() as session:
-        artifact = ReportArtifact(
-            start_date=date(2026, 9, 1),
-            end_date=date(2026, 9, 30),
-            artifact_path="missing.pdf",
-        )
-        session.add(artifact)
+        report = Report(path="missing.pdf")
+        session.add(report)
         session.commit()
-        report_id = artifact.id
+        report_id = report.id
 
-    response = client.get(f"/reports/{report_id}/download")
+    response = client.get(f"/reports/{report_id}/file")
 
     assert response.status_code == 410

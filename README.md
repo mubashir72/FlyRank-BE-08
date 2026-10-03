@@ -51,8 +51,10 @@ SQLite and PDF files are persisted in Compose volumes. Seed data is fictional.
 
 ## Generate and download a report
 
-`POST /reports` accepts optional inclusive ISO date bounds. By default, the
-report covers the latest 30 calendar days, including today.
+`POST /reports` synchronously aggregates the latest 30 calendar days, renders
+the PDF, saves it under `reports/`, and records its ID, relative file path, and
+creation time in the `reports` table. Optional inclusive ISO date bounds can be
+provided.
 
 ```powershell
 curl.exe -X POST http://localhost:8000/reports `
@@ -60,12 +62,15 @@ curl.exe -X POST http://localhost:8000/reports `
   -d "{}"
 ```
 
-The response includes `id` and `download_url`. Open the URL or download it:
+The response includes `id` and `file`. Download the PDF from that link:
 
 ```powershell
-curl.exe -L http://localhost:8000/reports/REPORT_ID/download `
+curl.exe -L http://localhost:8000/reports/REPORT_ID/file `
   -o sales-report.pdf
 ```
+
+`GET /reports/{id}` returns the stored report row and its file link. An unknown
+ID returns `404`.
 
 For a specific period:
 
@@ -82,7 +87,7 @@ For a specific period:
 | `POST` | `/reports` | Generate a report and return its download link |
 | `GET` | `/reports` | List recent reports (optional `limit`, 1-100) |
 | `GET` | `/reports/{id}` | Look up a report and its download URL |
-| `GET` | `/reports/{id}/download` | Download the saved PDF |
+| `GET` | `/reports/{id}/file` | Download the saved PDF |
 
 The report data includes total orders, total revenue, the five highest-revenue
 products, order counts for each of the latest seven days, and all order rows.
@@ -101,9 +106,10 @@ python -m scripts.render_test_report
 This saves `reports/test.pdf`. The detailed table repeats its header on each
 printed page and keeps each order row together across page breaks.
 
-The API stores each PDF's path and date range in SQLite; file bytes stay on
-disk. Repeating a report request for the same date range reuses its existing
-artifact.
+The API stores each PDF's relative path in SQLite; file bytes stay on disk.
+Move report generation to a background job when reports take long enough to
+risk request timeouts or when concurrent report requests noticeably consume
+API capacity.
 
 Scheduled or background generation is optional workshop stretch work and is
 not enabled by default.

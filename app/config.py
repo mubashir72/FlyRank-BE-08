@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_path: Path = Path("report.db")
-    artifact_dir: str = "artifacts"
+    artifact_dir: str = "reports"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -1,11 +1,14 @@
 from datetime import date, datetime, timedelta
+
 from pydantic import BaseModel, Field, model_validator
 
-from app.models import ReportArtifact
+from app.models import Report
 
 
 class ReportCreate(BaseModel):
-    start_date: date = Field(default_factory=lambda: date.today() - timedelta(days=29))
+    start_date: date = Field(
+        default_factory=lambda: date.today() - timedelta(days=29)
+    )
     end_date: date = Field(default_factory=date.today)
 
     @model_validator(mode="after")
@@ -15,19 +18,22 @@ class ReportCreate(BaseModel):
         return self
 
 
+class ReportCreated(BaseModel):
+    id: str
+    file: str
+
+
 class ReportResponse(BaseModel):
     id: str
-    start_date: date
-    end_date: date
+    path: str
     created_at: datetime
-    download_url: str
+    file: str
 
     @classmethod
-    def from_artifact(cls, artifact: ReportArtifact) -> "ReportResponse":
+    def from_report(cls, report: Report) -> "ReportResponse":
         return cls(
-            id=artifact.id,
-            start_date=artifact.start_date,
-            end_date=artifact.end_date,
-            created_at=artifact.created_at,
-            download_url=f"/reports/{artifact.id}/download",
+            id=report.id,
+            path=report.path,
+            created_at=report.created_at,
+            file=f"/reports/{report.id}/file",
         )
