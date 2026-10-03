@@ -5,6 +5,7 @@ __pycache__/
 .pytest-tmp/
 *.py[cod]
 artifacts/
-/reports/*.pdf
+/reports/
+report.db
 .env.local
 AccessDesk prd.pdf

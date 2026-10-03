@@ -1,31 +1,23 @@
-# Sales report pipeline
+# Sales Report Pipeline
 
-A FastAPI service that aggregates a small SQLite orders database, renders an
-HTML report to PDF with Playwright Chromium, saves the PDF to disk, and returns
-a download link. Report generation is synchronous, as required by the workshop.
+A small FastAPI application that aggregates order data with SQL, renders a
+multi-page PDF using a Jinja HTML template and Playwright Chromium, and serves
+the saved PDF by link. The generation endpoint is synchronous; the PDF bytes
+stay on disk rather than being stored in or returned as JSON.
 
 ## Dataset
 
-Option A uses Python's built-in `sqlite3` module. The seed script creates
-`report.db` with an `orders` table (`id`, `customer`, `product`, `amount`,
-`created_at`) and 200 fictional orders across six products, dated within the
-last 30 days. Each seed run deletes existing orders before inserting a fresh
-set, so running it repeatedly always leaves exactly 200 rows. The initial
-seeded `report.db` is committed as the Stage 1 checkpoint; rerun the script to
-replace its sample data.
-
-```powershell
-python -m app.seed_data
-python -c "import sqlite3; db=sqlite3.connect('report.db'); print(db.execute('SELECT COUNT(*) FROM orders').fetchone()[0])"
-python -m app.seed_data
-python -c "import sqlite3; db=sqlite3.connect('report.db'); print(db.execute('SELECT COUNT(*) FROM orders').fetchone()[0])"
-```
-
-Both count checks print `200`.
+This project uses **Option A: the little shop**. The seed script creates
+`report.db` with an `orders` table and 200 fictional orders across six products.
+Each run clears and reseeds the table, so it can be run repeatedly and always
+leaves exactly 200 orders. The database and generated PDFs are local artifacts
+and are intentionally excluded from Git; `app/seed_data.py` is the recipe for
+recreating the data.
 
 ## Run locally
 
-Install Python 3.10+ and run:
+Prerequisites: Python 3.10 or newer. In PowerShell, install dependencies,
+install Chromium, seed the database, and start the API:
 
 ```powershell
 python -m venv .venv
@@ -36,90 +28,102 @@ python -m app.seed_data
 uvicorn app.main:app --reload
 ```
 
-The API is at `http://localhost:8000`; interactive docs are at
-`http://localhost:8000/docs`.
+The API listens at `http://localhost:8000`; interactive API docs are at
+`http://localhost:8000/docs`. The app creates the `reports` bookkeeping table
+on startup.
 
-## Run with Docker Compose
+## Aggregation SQL
 
-```powershell
-docker compose up --build
-docker compose exec api python -m app.seed_data
+`get_report_data()` uses these SQL aggregations for the selected inclusive
+date range. The daily query covers the latest seven days; the application
+fills in dates with no orders as zero.
+
+```sql
+-- Totals
+SELECT
+    COUNT(orders.id) AS total_orders,
+    COALESCE(SUM(orders.amount), 0) AS total_revenue
+FROM orders
+WHERE orders.created_at BETWEEN :start_date AND :end_date;
+
+-- Top five products by revenue
+SELECT
+    orders.product,
+    SUM(orders.amount) AS revenue
+FROM orders
+WHERE orders.created_at BETWEEN :start_date AND :end_date
+GROUP BY orders.product
+ORDER BY SUM(orders.amount) DESC, orders.product
+LIMIT 5;
+
+-- Orders per day for the latest seven days
+SELECT
+    orders.created_at,
+    COUNT(orders.id) AS orders
+FROM orders
+WHERE orders.created_at BETWEEN :week_start AND :end_date
+  AND orders.created_at BETWEEN :start_date AND :end_date
+GROUP BY orders.created_at
+ORDER BY orders.created_at;
 ```
 
-SQLite and PDF files are persisted in Compose volumes. Seed data is fictional.
+The report also includes the individual order rows for its detailed table.
 
 ## Generate and download a report
 
-`POST /reports` synchronously aggregates the latest 30 calendar days, renders
-the PDF, saves it under `reports/`, and records its ID, relative file path, and
-creation time in the `reports` table. Optional inclusive ISO date bounds can be
-provided.
+POST generates a report and returns its `id` and `file` link. Use
+`{"force":true}` to explicitly generate a fresh PDF even if today's report
+already exists.
 
 ```powershell
-curl.exe -X POST http://localhost:8000/reports `
+$response = curl.exe -sS -i -X POST http://localhost:8000/reports `
   -H "Content-Type: application/json" `
-  -d "{}"
+  -d '{"force":true}'
+$response
 ```
 
-The response includes `id` and `file`. Download the PDF from that link:
+The response is `201 Created` with a body like:
+
+```json
+{"id":"<report-id>","file":"/reports/<report-id>/file"}
+```
+
+Download that exact report using the ID from the response:
 
 ```powershell
-curl.exe -L http://localhost:8000/reports/REPORT_ID/file `
+curl.exe -fL http://localhost:8000/reports/<report-id>/file `
   -o sales-report.pdf
 ```
 
-Only one report is generated per day by default; subsequent requests return the
-existing ID and link with `200`. Send `{"force":true}` to generate a fresh
-report anyway.
+The saved `sales-report.pdf` is a real PDF. `GET /reports/{id}` returns the
+stored path, creation time, and file link; unknown IDs return `404`.
 
-`GET /reports/{id}` returns the stored report row and its file link. An unknown
-ID returns `404`.
+## Stage 4 and Stage 5
 
-For a specific period:
+**Stage 4:** Generation runs in the request and takes a few seconds; move it to
+a background job when report size or request volume risks timeouts or consumes
+too much API capacity.
 
-```json
-{"start_date":"2026-09-01","end_date":"2026-09-30"}
-```
+**Stage 5:** The first request per day creates a report and returns `201`;
+subsequent requests reuse its ID and link with `200`, preventing duplicate
+work and files. Send `{"force":true}` when a fresh report is needed. Without
+this check, a billing system could charge a customer twice for one purchase.
 
-## API
+## Sample PDF
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/health` | Liveness checkpoint |
-| `GET` | `/health/ready` | SQLite readiness |
-| `POST` | `/reports` | Generate a report and return its download link |
-| `GET` | `/reports` | List recent reports (optional `limit`, 1-100) |
-| `GET` | `/reports/{id}` | Look up a report and its download URL |
-| `GET` | `/reports/{id}/file` | Download the saved PDF |
+Page 1 of a generated report from the 200-order shop dataset:
 
-The report data includes total orders, total revenue, the five highest-revenue
-products, order counts for each of the latest seven days, and all order rows.
-Print the aggregated data as JSON without rendering a PDF:
+![Page 1 of the generated sales report](report-page-1.png)
 
-```powershell
-python -m scripts.print_report
-```
-
-Render the current dataset into a multi-page PDF with the full order table:
+To regenerate the local sample PDF and JSON aggregation:
 
 ```powershell
 python -m scripts.render_test_report
+python -m scripts.print_report
 ```
 
-This saves `reports/test.pdf`. The detailed table repeats its header on each
-printed page and keeps each order row together across page breaks.
-
-The API stores each PDF's relative path in SQLite; file bytes stay on disk.
-Move report generation to a background job when reports take long enough to
-risk request timeouts or when concurrent report requests noticeably consume
-API capacity.
-
-The daily check protects against duplicate work and report files when a user
-submits the same action more than once. Without it, a billing system could
-charge a customer twice for one purchase.
-
-Scheduled or background generation is optional workshop stretch work and is
-not enabled by default.
+These commands write the PDF to `reports/test.pdf` and print the report data as
+JSON, respectively.
 
 ## Tests
 
