@@ -59,25 +59,23 @@ def test_generate_store_and_download_report(
     monkeypatch: pytest.MonkeyPatch,
     artifact_dir: Path,
 ) -> None:
-    from app.models import Sale
+    from app.models import Order
 
     monkeypatch.setattr("app.main.settings.artifact_dir", str(artifact_dir))
     with session_factory() as session:
         session.add_all(
             [
-                Sale(
-                    order_id="ORD-001",
-                    order_date=date(2026, 9, 10),
+                Order(
+                    customer="Alex",
                     product="Keyboard",
-                    quantity=2,
-                    unit_price=Decimal("25.00"),
+                    amount=Decimal("25.00"),
+                    created_at=date(2026, 9, 10),
                 ),
-                Sale(
-                    order_id="ORD-001",
-                    order_date=date(2026, 9, 10),
+                Order(
+                    customer="Alex",
                     product="Mouse",
-                    quantity=1,
-                    unit_price=Decimal("15.00"),
+                    amount=Decimal("15.00"),
+                    created_at=date(2026, 9, 10),
                 ),
             ]
         )
@@ -115,12 +113,12 @@ def test_repeated_date_range_reuses_stored_report(
     renders: list[bool] = []
     monkeypatch.setattr("app.main.settings.artifact_dir", str(artifact_dir))
     monkeypatch.setattr(
-        "app.main.query_sales_summary",
+        "app.main.query_orders_summary",
         lambda *_args: {
             "order_count": 0,
-            "units_sold": 0,
             "revenue": Decimal("0"),
             "average_order_value": Decimal("0"),
+            "customer_count": 0,
             "product_count": 0,
         },
     )

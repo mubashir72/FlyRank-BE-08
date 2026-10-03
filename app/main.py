@@ -15,7 +15,7 @@ from app.config import settings
 from app.database import Base, engine, get_db
 from app.models import ReportArtifact
 from app.schemas import ReportCreate, ReportResponse
-from app.services.sales_reports import query_sales_summary, render_sales_report
+from app.services.sales_reports import query_orders_summary, render_sales_report
 
 logger = logging.getLogger(__name__)
 DbSession = Annotated[Session, Depends(get_db)]
@@ -23,6 +23,7 @@ DbSession = Annotated[Session, Depends(get_db)]
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    settings.database_path.parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
     Path(settings.artifact_dir).mkdir(parents=True, exist_ok=True)
     yield
@@ -73,7 +74,7 @@ def create_report(payload: ReportCreate, db: DbSession) -> ReportResponse:
         return ReportResponse.from_artifact(existing)
 
     try:
-        summary = query_sales_summary(db, payload.start_date, payload.end_date)
+        summary = query_orders_summary(db, payload.start_date, payload.end_date)
         pdf_bytes = render_sales_report(summary, payload.start_date, payload.end_date)
         artifact_dir = Path(settings.artifact_dir).resolve()
         artifact_dir.mkdir(parents=True, exist_ok=True)

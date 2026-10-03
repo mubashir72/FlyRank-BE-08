@@ -1,41 +1,68 @@
+import random
+import sqlite3
 from datetime import date, timedelta
-from decimal import Decimal
+from pathlib import Path
 
-from sqlalchemy import func, select
+from app.config import settings
 
-from app.database import Base, SessionLocal, engine
-from app.models import Sale
+CUSTOMERS = (
+    "Alex Morgan",
+    "Jordan Lee",
+    "Sam Taylor",
+    "Casey Patel",
+    "Riley Chen",
+    "Jamie Rivera",
+    "Avery Kim",
+    "Drew Wilson",
+)
+PRODUCTS = (
+    "Wireless headphones",
+    "USB-C hub",
+    "Laptop stand",
+    "Mechanical keyboard",
+    "Webcam",
+    "Portable SSD",
+)
 
-PRODUCTS = [
-    ("Wireless headphones", Decimal("79.99")),
-    ("USB-C hub", Decimal("49.50")),
-    ("Laptop stand", Decimal("34.00")),
-    ("Mechanical keyboard", Decimal("119.00")),
-    ("Webcam", Decimal("64.95")),
-]
 
-
-def make_sample_sales(today: date | None = None) -> list[Sale]:
-    report_date = today or date.today()
-    return [
-        Sale(
-            order_id=f"ORD-{index // 2 + 1:03}",
-            order_date=report_date - timedelta(days=(index // 2) % 30),
-            product=PRODUCTS[(index * 7) % len(PRODUCTS)][0],
-            quantity=index % 4 + 1,
-            unit_price=PRODUCTS[(index * 7) % len(PRODUCTS)][1],
+def seed_orders(database_path: Path | None = None) -> int:
+    database_path = database_path or settings.database_path
+    database_path = database_path.resolve()
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    today = date.today()
+    earliest_date = today - timedelta(days=29)
+    orders = [
+        (
+            random.choice(CUSTOMERS),
+            random.choice(PRODUCTS),
+            round(random.uniform(5, 200), 2),
+            (earliest_date + timedelta(days=random.randrange(30))).isoformat(),
         )
-        for index in range(200)
+        for _ in range(200)
     ]
 
-
-def seed_sales() -> None:
-    Base.metadata.create_all(bind=engine)
-    with SessionLocal() as session:
-        if session.scalar(select(func.count()).select_from(Sale)) == 0:
-            session.add_all(make_sample_sales())
-            session.commit()
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                customer VARCHAR(120) NOT NULL,
+                product VARCHAR(120) NOT NULL,
+                amount NUMERIC(10, 2) NOT NULL CHECK (amount >= 0),
+                created_at DATE NOT NULL
+            )
+            """
+        )
+        connection.execute("DELETE FROM orders")
+        connection.executemany(
+            """
+            INSERT INTO orders (customer, product, amount, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            orders,
+        )
+        return connection.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
 
 
 if __name__ == "__main__":
-    seed_sales()
+    print(f"Seeded {seed_orders()} orders into {settings.database_path}.")

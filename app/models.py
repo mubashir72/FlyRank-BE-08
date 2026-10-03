@@ -6,7 +6,6 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
-    Integer,
     Numeric,
     String,
     UniqueConstraint,
@@ -17,19 +16,17 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
 
-class Sale(Base):
-    __tablename__ = "sales"
+class Order(Base):
+    __tablename__ = "orders"
     __table_args__ = (
-        CheckConstraint("quantity > 0", name="ck_sales_quantity_positive"),
-        CheckConstraint("unit_price >= 0", name="ck_sales_price_nonnegative"),
+        CheckConstraint("amount >= 0", name="ck_orders_amount_nonnegative"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    order_id: Mapped[str] = mapped_column(String(40), index=True)
-    order_date: Mapped[date] = mapped_column(Date, index=True)
+    customer: Mapped[str] = mapped_column(String(120), index=True)
     product: Mapped[str] = mapped_column(String(120), index=True)
-    quantity: Mapped[int] = mapped_column(Integer)
-    unit_price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    created_at: Mapped[date] = mapped_column(Date, index=True)
 
 
 class ReportArtifact(Base):

@@ -8,14 +8,14 @@ from playwright.sync_api import sync_playwright
 from sqlalchemy import distinct, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Sale
+from app.models import Order
 
 
-class SalesSummary(TypedDict):
+class OrdersSummary(TypedDict):
     order_count: int
-    units_sold: int
     revenue: Decimal
     average_order_value: Decimal
+    customer_count: int
     product_count: int
 
 
@@ -25,40 +25,34 @@ template_environment = Environment(
 )
 
 
-def query_sales_summary(
+def query_orders_summary(
     session: Session, start_date: date, end_date: date
-) -> SalesSummary:
-    order_totals = (
-        select(
-            Sale.order_id.label("order_id"),
-            func.sum(Sale.quantity * Sale.unit_price).label("order_total"),
-        )
-        .where(Sale.order_date.between(start_date, end_date))
-        .group_by(Sale.order_id)
-        .cte("order_totals")
-    )
+) -> OrdersSummary:
+    date_filter = Order.created_at.between(start_date, end_date)
     statement = select(
-        func.count(distinct(Sale.order_id)).label("order_count"),
-        func.coalesce(func.sum(Sale.quantity), 0).label("units_sold"),
-        func.coalesce(func.sum(Sale.quantity * Sale.unit_price), 0).label("revenue"),
-        func.coalesce(
-            select(func.avg(order_totals.c.order_total)).scalar_subquery(), 0
-        ).label("average_order_value"),
-        func.count(distinct(Sale.product)).label("product_count"),
-    ).where(Sale.order_date.between(start_date, end_date))
+        func.count(Order.id).label("order_count"),
+        func.coalesce(func.sum(Order.amount), 0).label("revenue"),
+        func.coalesce(func.round(func.avg(Order.amount), 2), 0).label(
+            "average_order_value"
+        ),
+        func.count(distinct(Order.customer)).label("customer_count"),
+        func.count(distinct(Order.product)).label("product_count"),
+    ).where(date_filter)
     totals = session.execute(statement).one()
 
     return {
         "order_count": int(totals.order_count),
-        "units_sold": int(totals.units_sold),
-        "revenue": Decimal(totals.revenue),
-        "average_order_value": Decimal(totals.average_order_value),
+        "revenue": Decimal(str(totals.revenue)).quantize(Decimal("0.01")),
+        "average_order_value": Decimal(str(totals.average_order_value)).quantize(
+            Decimal("0.01")
+        ),
+        "customer_count": int(totals.customer_count),
         "product_count": int(totals.product_count),
     }
 
 
 def render_sales_report(
-    summary: SalesSummary, start_date: date, end_date: date
+    summary: OrdersSummary, start_date: date, end_date: date
 ) -> bytes:
     template = template_environment.get_template("sales_report.html")
     html = template.render(
