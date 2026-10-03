@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.database import Base
 from app.models import Order
 from app.seed_data import PRODUCTS, seed_orders
-from app.services.sales_reports import query_orders_summary, render_sales_report
+from app.services.sales_reports import get_report_data, render_sales_report
 
 
 def make_session() -> Session:
@@ -18,33 +18,33 @@ def make_session() -> Session:
     return Session(engine)
 
 
-def test_order_summary_is_one_sql_aggregation_over_requested_dates() -> None:
+def test_report_data_has_four_aggregated_sections() -> None:
     with make_session() as session:
         session.add_all(
             [
                 Order(
                     customer="Alex",
                     product="Keyboard",
-                    amount=Decimal("10.00"),
-                    created_at=date(2026, 9, 1),
-                ),
-                Order(
-                    customer="Alex",
-                    product="Mouse",
-                    amount=Decimal("5.00"),
-                    created_at=date(2026, 9, 1),
+                    amount=Decimal("50.00"),
+                    created_at=date(2026, 9, 30),
                 ),
                 Order(
                     customer="Jordan",
                     product="Keyboard",
-                    amount=Decimal("10.00"),
-                    created_at=date(2026, 9, 2),
+                    amount=Decimal("25.00"),
+                    created_at=date(2026, 9, 29),
                 ),
                 Order(
-                    customer="Outside",
-                    product="Out of range",
-                    amount=Decimal("99.00"),
-                    created_at=date(2026, 8, 31),
+                    customer="Alex",
+                    product="Mouse",
+                    amount=Decimal("40.00"),
+                    created_at=date(2026, 9, 25),
+                ),
+                Order(
+                    customer="Sam",
+                    product="Old product",
+                    amount=Decimal("100.00"),
+                    created_at=date(2026, 9, 23),
                 ),
             ]
         )
@@ -58,27 +58,45 @@ def test_order_summary_is_one_sql_aggregation_over_requested_dates() -> None:
             ),
         )
 
-        summary = query_orders_summary(
-            session, date(2026, 9, 1), date(2026, 9, 2)
+        report = get_report_data(
+            session, date(2026, 9, 23), date(2026, 9, 30)
         )
 
-    assert summary["order_count"] == 3
-    assert summary["revenue"] == Decimal("25.00")
-    assert summary["average_order_value"] == Decimal("8.33")
-    assert summary["customer_count"] == 2
-    assert summary["product_count"] == 2
-    assert len(statements) == 1
-    assert "orders" in statements[0]
+    assert report["total_orders"] == 4
+    assert report["total_revenue"] == Decimal("215.00")
+    assert report["top_products"][:2] == [
+        {"product": "Old product", "revenue": Decimal("100.00")},
+        {"product": "Keyboard", "revenue": Decimal("75.00")},
+    ]
+    assert report["orders_per_day"] == [
+        {"date": date(2026, 9, 24), "orders": 0},
+        {"date": date(2026, 9, 25), "orders": 1},
+        {"date": date(2026, 9, 26), "orders": 0},
+        {"date": date(2026, 9, 27), "orders": 0},
+        {"date": date(2026, 9, 28), "orders": 0},
+        {"date": date(2026, 9, 29), "orders": 1},
+        {"date": date(2026, 9, 30), "orders": 1},
+    ]
+    assert len(report["top_products"]) <= 5
+    assert len(report) == 4
+    assert len(statements) == 3
+    assert "GROUP BY" in statements[1].upper()
+    assert "LIMIT" in statements[1].upper()
+    assert "GROUP BY" in statements[2].upper()
 
 
 def test_html_template_renders_to_a_real_pdf() -> None:
     pdf = render_sales_report(
         {
-            "order_count": 2,
-            "revenue": Decimal("25.00"),
-            "average_order_value": Decimal("12.50"),
-            "customer_count": 2,
-            "product_count": 2,
+            "total_orders": 2,
+            "total_revenue": Decimal("25.00"),
+            "top_products": [
+                {"product": "Keyboard", "revenue": Decimal("25.00")}
+            ],
+            "orders_per_day": [
+                {"date": date(2026, 9, day), "orders": 0}
+                for day in range(24, 31)
+            ],
         },
         date(2026, 9, 1),
         date(2026, 9, 30),

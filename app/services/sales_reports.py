@@ -1,22 +1,31 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import TypedDict
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from playwright.sync_api import sync_playwright
-from sqlalchemy import distinct, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Order
 
 
-class OrdersSummary(TypedDict):
-    order_count: int
+class ProductRevenue(TypedDict):
+    product: str
     revenue: Decimal
-    average_order_value: Decimal
-    customer_count: int
-    product_count: int
+
+
+class DailyOrders(TypedDict):
+    date: date
+    orders: int
+
+
+class ReportData(TypedDict):
+    total_orders: int
+    total_revenue: Decimal
+    top_products: list[ProductRevenue]
+    orders_per_day: list[DailyOrders]
 
 
 template_environment = Environment(
@@ -25,40 +34,83 @@ template_environment = Environment(
 )
 
 
-def query_orders_summary(
-    session: Session, start_date: date, end_date: date
-) -> OrdersSummary:
-    date_filter = Order.created_at.between(start_date, end_date)
-    statement = select(
-        func.count(Order.id).label("order_count"),
-        func.coalesce(func.sum(Order.amount), 0).label("revenue"),
-        func.coalesce(func.round(func.avg(Order.amount), 2), 0).label(
-            "average_order_value"
-        ),
-        func.count(distinct(Order.customer)).label("customer_count"),
-        func.count(distinct(Order.product)).label("product_count"),
-    ).where(date_filter)
-    totals = session.execute(statement).one()
+def get_report_data(
+    session: Session,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    *,
+    today: date | None = None,
+) -> ReportData:
+    report_date = end_date or today or date.today()
+    week_start = report_date - timedelta(days=6)
+    period_filter = (
+        Order.created_at.between(start_date, end_date)
+        if start_date is not None and end_date is not None
+        else None
+    )
+
+    totals_query = select(
+        func.count(Order.id).label("total_orders"),
+        func.coalesce(func.sum(Order.amount), 0).label("total_revenue"),
+    )
+    product_query = (
+        select(
+            Order.product,
+            func.sum(Order.amount).label("revenue"),
+        )
+        .group_by(Order.product)
+        .order_by(func.sum(Order.amount).desc(), Order.product)
+        .limit(5)
+    )
+    if period_filter is not None:
+        totals_query = totals_query.where(period_filter)
+        product_query = product_query.where(period_filter)
+
+    totals = session.execute(totals_query).one()
+    product_rows = session.execute(product_query).all()
+    daily_query = (
+        select(Order.created_at, func.count(Order.id).label("orders"))
+        .where(Order.created_at.between(week_start, report_date))
+        .group_by(Order.created_at)
+        .order_by(Order.created_at)
+    )
+    if period_filter is not None:
+        daily_query = daily_query.where(period_filter)
+    daily_rows = session.execute(daily_query).all()
+    orders_by_day = {row.created_at: int(row.orders) for row in daily_rows}
 
     return {
-        "order_count": int(totals.order_count),
-        "revenue": Decimal(str(totals.revenue)).quantize(Decimal("0.01")),
-        "average_order_value": Decimal(str(totals.average_order_value)).quantize(
+        "total_orders": int(totals.total_orders),
+        "total_revenue": Decimal(str(totals.total_revenue)).quantize(
             Decimal("0.01")
         ),
-        "customer_count": int(totals.customer_count),
-        "product_count": int(totals.product_count),
+        "top_products": [
+            {
+                "product": row.product,
+                "revenue": Decimal(str(row.revenue)).quantize(Decimal("0.01")),
+            }
+            for row in product_rows
+        ],
+        "orders_per_day": [
+            {
+                "date": week_start + timedelta(days=offset),
+                "orders": orders_by_day.get(
+                    week_start + timedelta(days=offset), 0
+                ),
+            }
+            for offset in range(7)
+        ],
     }
 
 
 def render_sales_report(
-    summary: OrdersSummary, start_date: date, end_date: date
+    report: ReportData, start_date: date, end_date: date
 ) -> bytes:
     template = template_environment.get_template("sales_report.html")
     html = template.render(
         start_date=start_date,
         end_date=end_date,
-        summary=summary,
+        report=report,
     )
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()

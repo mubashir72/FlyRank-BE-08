@@ -84,10 +84,17 @@ For a specific period:
 | `GET` | `/reports/{id}` | Look up a report and its download URL |
 | `GET` | `/reports/{id}/download` | Download the saved PDF |
 
-One SQL query calculates order count, revenue, average order value, distinct
-customers, and distinct products. The API stores each PDF's path and date range
-in SQLite; file bytes stay on disk. Repeating a report request for the same
-date range reuses its existing artifact.
+The Stage 2 report data includes total orders, total revenue, the five
+highest-revenue products, and order counts for each of the latest seven days.
+Print the aggregated data as JSON without rendering a PDF:
+
+```powershell
+python -m scripts.print_report
+```
+
+The API stores each PDF's path and date range in SQLite; file bytes stay on
+disk. Repeating a report request for the same date range reuses its existing
+artifact.
 
 Scheduled or background generation is optional workshop stretch work and is
 not enabled by default.

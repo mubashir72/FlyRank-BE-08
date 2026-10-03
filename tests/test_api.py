@@ -113,13 +113,12 @@ def test_repeated_date_range_reuses_stored_report(
     renders: list[bool] = []
     monkeypatch.setattr("app.main.settings.artifact_dir", str(artifact_dir))
     monkeypatch.setattr(
-        "app.main.query_orders_summary",
+        "app.main.get_report_data",
         lambda *_args: {
-            "order_count": 0,
-            "revenue": Decimal("0"),
-            "average_order_value": Decimal("0"),
-            "customer_count": 0,
-            "product_count": 0,
+            "total_orders": 0,
+            "total_revenue": Decimal("0"),
+            "top_products": [],
+            "orders_per_day": [],
         },
     )
 
